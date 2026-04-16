@@ -64,7 +64,7 @@ Create an alias in your `.zshrc` or `.bashrc` for quick access:
 
 ## 🏗️ Tech Stack
 
-  * **Language**: Python 3.12+
+  * **Language**: Python 3.14
   * **Environment**: Arch Linux (KDE Plasma)
   * **Protocols**: WireGuard & AmneziaWG
   * **Networking**: Linux `iproute2`, `iptables`, and `ping` utilities
