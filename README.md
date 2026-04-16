@@ -49,5 +49,3 @@ The project is under active development. Upcoming features include:
 ## 🌟 Support
 If you find this tool useful, please **leave a star** to help the project grow! Every star is a huge motivation for a 9th-grade dev on a mission to Europe. 🚀
 
-## 🌟 Support
-If you find this tool useful, please **leave a star** to help the project grow! Every star is a huge motivation for a 9th-grade dev on a mission to Europe. 🚀
