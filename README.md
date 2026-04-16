@@ -13,7 +13,7 @@ A lightweight Python CLI for Linux (Arch/Ubuntu) that manages WireGuard and Amne
 ### 1. Server Side (Ubuntu 24.04)
 Run the automated setup script to install dependencies and enable IP forwarding:
 ```bash
-wget [https://raw.githubusercontent.com/YOUR_USERNAME/vpn-agent/main/setup_server.sh](https://raw.githubusercontent.com/YOUR_USERNAME/vpn-agent/main/setup_server.sh)
+wget [https://raw.githubusercontent.com/artplay254/vpn-agent/main/setup_server.sh](https://raw.githubusercontent.com/artplay254/vpn-agent/main/setup_server.sh)
 chmod +x setup_server.sh
 sudo ./setup_server.sh
 
@@ -21,7 +21,7 @@ sudo ./setup_server.sh
 ### 2. Client Side (Arch/Linux)
 Clone the repository to your local config folder:
 ```bash
-git clone [https://github.com/YOUR_USERNAME/vpn-agent](https://github.com/YOUR_USERNAME/vpn-agent) ~/.config/vpn-agent
+git clone [https://github.com/artplay254/vpn-agent](https://github.com/artplay254/vpn-agent) ~/.config/vpn-agent
 cd ~/.config/vpn-agent
 
 ```
