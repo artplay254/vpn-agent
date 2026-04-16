@@ -1,78 +1,53 @@
-# 🛡️ VPN-Agent
+🛡️ VPN-Agent
 
-**A resilient, auto-switching VPN CLI for Linux that beats DPI blocking.**
+A lightweight Python CLI for Linux (Arch/Ubuntu) that manages WireGuard and AmneziaWG connections with intelligent fallback and auto-recovery logic. Built to bypass DPI blocks while maintaining high performance.
 
-VPN-Agent is a lightweight Python utility designed for users in restricted network environments. It manages **Standard WireGuard** and **AmneziaWG** (obfuscated) connections, implementing an intelligent "Saiyan-mindset" logic: if the standard protocol is blocked by Deep Packet Inspection (DPI), it automatically fails over to an obfuscated tunnel.
+## ✨ Features
+- **Smart Fallback**: Automatically tries standard WireGuard (3 attempts) before falling back to AmneziaWG obfuscation.
+- **Latency Monitoring**: Real-time RTT (ms) tracking visible in the status command.
+- **Auto-Recovery (Daemon)**: Monitors connection health and automatically attempts to revert to standard WireGuard if the network block is lifted.
+- **English-First CLI**: Professional command-line interface designed for developers.
 
-## 🚀 Features
+## 🚀 Installation
 
-  * **Intelligent Fallback**: Attempts standard WireGuard connections first and switches to AmneziaWG only when necessary.
-  * **Auto-Recovery (Daemon)**: Periodically checks if the network restriction has been lifted to revert back to the high-performance standard WireGuard.
-  * **Latency Tracking**: Real-time RTT (Round Trip Time) monitoring integrated directly into the status dashboard.
-  * **Developer-Friendly**: Built with a clean CLI, modular configuration, and root-safety checks.
-
------
-
-## 🛠️ Installation
-
-### 1\. Server Setup (Ubuntu 24.04)
-
-Run the automated setup script on your VPS to install AmneziaWG and optimize network forwarding:
-
+### 1. Server Side (Ubuntu 24.04)
+Run the automated setup script to install dependencies and enable IP forwarding:
 ```bash
-wget https://raw.githubusercontent.com/artplay254/vpn-agent/main/setup_server.sh
+wget [https://raw.githubusercontent.com/YOUR_USERNAME/vpn-agent/main/setup_server.sh](https://raw.githubusercontent.com/YOUR_USERNAME/vpn-agent/main/setup_server.sh)
 chmod +x setup_server.sh
 sudo ./setup_server.sh
+
 ```
-
-### 2\. Client Setup (Arch Linux/Ubuntu)
-
-Clone the repository into your local configuration directory:
-
+### 2. Client Side (Arch/Linux)
+Clone the repository to your local config folder:
 ```bash
-mkdir -p ~/.config/vpn-agent
-git clone https://github.com/artplay254/vpn-agent.git ~/.config/vpn-agent
+git clone [https://github.com/YOUR_USERNAME/vpn-agent](https://github.com/YOUR_USERNAME/vpn-agent) ~/.config/vpn-agent
 cd ~/.config/vpn-agent
+
 ```
-
-### 3\. Configuration
-
-Copy the provided templates and add your specific keys/endpoints:
-
+Add your client_wg.conf and client_awg.conf to this directory.
+### 3. Quick Alias
+Add this to your ~/.zshrc or ~/.bashrc:
 ```bash
-cp client_wg.conf.example client_wg.conf
-cp client_awg.conf.example client_awg.conf
-# Edit files with your favorite editor (e.g., nano or nvim)
+alias vpn='sudo python3 ~/.config/vpn-agent/vpn_cli.py'
+
 ```
+## 🛠 Usage
+ * vpn up — Connect with auto-protocol selection.
+ * vpn status — Show active tunnel info and latency (⚡ ms).
+ * vpn daemon — Run in background for health monitoring and auto-recovery.
+ * vpn down — Disconnect all tunnels.
+## 🔜 Roadmap
+The project is under active development. Upcoming features include:
 
------
+- **Expanded Protocol Suite**: Support for additional obfuscation protocols (Xray/VLESS, ShadowTLS) to stay ahead of DPI.
+- **Auto-Optimization Engine**: Intelligent system that automatically tunes **MTU** and **Port** selection based on network conditions and packet loss.
+- **Log-Driven Intelligence**: A data-driven approach that analyzes connection logs to identify blocking patterns and adapt in real-time.
+- **Multi-Server Support**: Quick-switch functionality for geographically diverse VPS locations.
+- **TUI Dashboard**: A terminal-based interface for visual monitoring of traffic and protocol health.
 
-## 📖 Usage
+## 🌟 Support
+If you find this tool useful, please **leave a star** to help the project grow! Every star is a huge motivation for a 9th-grade dev on a mission to Europe. 🚀
 
-Create an alias in your `.zshrc` or `.bashrc` for quick access:
-`alias vpn='sudo python3 ~/.config/vpn-agent/vpn_cli.py'`.
-
-| Command | Description |
-| :--- | :--- |
-| `vpn up` | Connect using the best available protocol (Auto-fallback). |
-| `vpn status` | Show active protocol, real-time latency, and transfer stats. |
-| `vpn down` | Gracefully disconnect and clean up network interfaces. |
-| `vpn daemon` | Start the background monitor for auto-recovery. |
-| `vpn --version` | Check the current version of the agent. |
-
------
-
-## 🏗️ Tech Stack
-
-  * **Language**: Python 3.14
-  * **Environment**: Arch Linux (KDE Plasma)
-  * **Protocols**: WireGuard & AmneziaWG
-  * **Networking**: Linux `iproute2`, `iptables`, and `ping` utilities
-
-## 📝 License
-
-Distributed under the MIT License. See `LICENSE` for more information.
-
------
-
-**Author**: [Artem Semenihin](https://www.google.com/search?q=https://github.com/artplay254) — *Aspiring Full-Stack Developer*
+## 🌟 Support
+If you find this tool useful, please **leave a star** to help the project grow! Every star is a huge motivation for a 9th-grade dev on a mission to Europe. 🚀
