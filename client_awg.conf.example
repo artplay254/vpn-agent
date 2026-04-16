@@ -1,0 +1,20 @@
+[Interface]
+PrivateKey = <YOUR_CLIENT_PRIVATE_KEY>
+Address = 10.0.1.2/24
+DNS = 1.1.1.1
+
+Jc = 4
+Jmin = 40
+Jmax = 70
+S1 = 30
+S2 = 40
+H1 = 1234567891
+H2 = 1234567892
+H3 = 1234567893
+H4 = 1234567894
+MTU = 1280
+
+[Peer]
+PublicKey = <YOUR_CLIENT_PUBLIC_KEY>
+Endpoint = YOUR_SERVER_IP:443
+AllowedIPs = 0.0.0.0/0
