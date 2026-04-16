@@ -1,4 +1,4 @@
-🛡️ VPN-Agent
+# 🛡️ VPN-Agent
 
 A lightweight Python CLI for Linux (Arch/Ubuntu) that manages WireGuard and AmneziaWG connections with intelligent fallback and auto-recovery logic. Built to bypass DPI blocks while maintaining high performance.
 
