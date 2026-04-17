@@ -1,0 +1,61 @@
+{
+  "log": { "loglevel": "warning" },
+  "inbounds": [
+    {
+      "tag": "tun-in",
+      "protocol": "tun",
+      "settings": {
+        "interfaceName": "v-tun",
+        "address": ["10.0.0.2/24"],
+        "mtu": 1400,
+        "strictRoute": true,
+        "netstack": "gvisor",
+        "stack": "gvisor",
+        "sniffing": {
+          "enabled": true,
+          "destOverride": ["http", "tls", "quic"],
+          "routeOnly": true
+        }
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "protocol": "vless",
+      "tag": "proxy",
+      "settings": {
+        "vnext": [
+          {
+            "address": "YOUR_SERVER_IP_OR_DOMAIN",
+            "port": 443,
+            "users": [
+              {
+                "id": "YOUR_UUID",
+                "encryption": "none",
+                "flow": "xtls-rprx-vision"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "reality",
+        "realitySettings": {
+          "serverName": "www.microsoft.com",
+          "publicKey": "YOUR_PUBLIC_KEY",
+          "shortId": "YOUR_SHORT_ID",
+          "sni": "www.microsoft.com",
+          "fingerprint": "chrome"
+        }
+      }
+    },
+    { "protocol": "freedom", "tag": "direct" }
+  ],
+  "routing": {
+    "domainStrategy": "AsIs",
+    "rules": [
+      { "type": "field", "inboundTag": ["tun-in"], "outboundTag": "proxy" }
+    ]
+  }
+}
