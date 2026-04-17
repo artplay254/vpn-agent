@@ -1,50 +1,76 @@
 # 🛡️ VPN-Agent
 
-A lightweight Python CLI for Linux (Arch/Ubuntu) that manages WireGuard and AmneziaWG connections with intelligent fallback and auto-recovery logic. Built to bypass DPI blocks while maintaining high performance.
+A lightweight, intelligent Python CLI for Linux (Arch/Ubuntu) that manages a multi-layer defense against DPI. It automatically navigates through **WireGuard**, **AmneziaWG**, and **VLESS Reality** to ensure you stay connected.
 
 ## ✨ Features
-- **Smart Fallback**: Automatically tries standard WireGuard (3 attempts) before falling back to AmneziaWG obfuscation.
-- **Latency Monitoring**: Real-time RTT (ms) tracking visible in the status command.
-- **Auto-Recovery (Daemon)**: Monitors connection health and automatically attempts to revert to standard WireGuard if the network block is lifted.
-- **English-First CLI**: Professional command-line interface designed for developers.
+
+- **Smart Protocol Fallback**: The agent follows a tactical connection sequence to beat blocks:
+    1. **Standard WireGuard**: Attempts to connect (3 retries).
+    2. **AmneziaWG**: Falls back to obfuscated headers if standard WG is handshake-blocked.
+    3. **VLESS + Reality**: The final "stealth" layer for extreme DPI environments, masking traffic as standard HTTPS.
+- **Auto-Recovery (Daemon)**: Monitors connection health in the background. If the network block is lifted, the daemon can automatically revert to standard WireGuard to minimize overhead.
+- **Self-Healing Infrastructure**: 
+    - **Adaptive MTU Management**: Automatically forces optimized MTU settings (e.g., 1400) during the connection phase to prevent packet fragmentation on mobile carriers.
+    - **Dynamic Interface Detection**: Real-time detection of TUN devices (like `xray0`) to handle non-standard naming conventions.
+    - **Kernel-Level IPv4 Force**: Ensures TUN interfaces are properly initialized with an IP and set to `UP` state on Arch Linux.
+- **Advanced Monitoring**: 
+    - **TCP Handshake Validation**: Verifies real-world connectivity via `1.1.1.1:443` instead of unreliable ICMP pings.
+    - **Dual Logging**: Separate streams for `agent.log` (management) and `xray.log` (core).
+- **English-First CLI**: Professional interface designed for developers.
 
 ## 🚀 Installation
 
 ### 1. Server Side (Ubuntu 24.04)
-Run the automated setup script to install dependencies and enable IP forwarding:
+Run the automated setup script to configure WireGuard/AmneziaWG and install the Xray-core Reality stack:
 ```bash
-wget [https://raw.githubusercontent.com/artplay254/vpn-agent/main/setup_server.sh](https://raw.githubusercontent.com/artplay254/vpn-agent/main/setup_server.sh)
+wget https://raw.githubusercontent.com/artplay254/vpn-agent/main/setup_server.sh
 chmod +x setup_server.sh
 sudo ./setup_server.sh
-
 ```
+
 ### 2. Client Side (Arch/Linux)
-Clone the repository to your local config folder:
+Clone the repository:
 ```bash
-git clone [https://github.com/artplay254/vpn-agent](https://github.com/artplay254/vpn-agent) ~/.config/vpn-agent
+git clone https://github.com/artplay254/vpn-agent ~/.config/vpn-agent
 cd ~/.config/vpn-agent
-
 ```
-Add your client_wg.conf and client_awg.conf to this directory.
+1. Add your `client_wg.conf` and `client_awg.conf`.
+2. Configure `vless.json` based on the provided `vless.json.example`.
+3. (Arch Users) `sudo setcap "cap_net_admin,cap_net_bind_service+ep" $(which xray)`
+
 ### 3. Quick Alias
 Add this to your ~/.zshrc or ~/.bashrc:
 ```bash
 alias vpn='sudo python3 ~/.config/vpn-agent/vpn_cli.py'
-
 ```
-## 🛠 Usage
- * vpn up — Connect with auto-protocol selection.
- * vpn status — Show active tunnel info and latency (⚡ ms).
- * vpn daemon — Run in background for health monitoring and auto-recovery.
- * vpn down — Disconnect all tunnels.
-## 🔜 Roadmap
-The project is under active development. Upcoming features include:
 
-- **Expanded Protocol Suite**: Support for additional obfuscation protocols (Xray/VLESS, ShadowTLS) to stay ahead of DPI.
-- **Auto-Optimization Engine**: Intelligent system that automatically tunes **MTU** and **Port** selection based on network conditions and packet loss.
-- **Log-Driven Intelligence**: A data-driven approach that analyzes connection logs to identify blocking patterns and adapt in real-time.
-- **Multi-Server Support**: Quick-switch functionality for geographically diverse VPS locations.
-- **TUI Dashboard**: A terminal-based interface for visual monitoring of traffic and protocol health.
+## 🛠 Usage
+
+### Commands
+- **Connect (preferred)**: `vpn connect`
+- **Disconnect (preferred)**: `vpn disconnect`
+- **Status**: `vpn status`
+- **Daemon**: `vpn daemon`
+
+### Deprecated aliases (still supported)
+- **Connect alias**: `vpn up`
+- **Disconnect alias**: `vpn down`
+
+### Options
+- **Force protocol**: `--proto {wg,awg,vless}`
+  - **Force WireGuard**: `vpn connect --proto wg`
+  - **Force AmneziaWG**: `vpn connect --proto awg`
+  - **Force VLESS (XRay)**: `vpn connect --proto vless`
+
+### Version/help
+- **Help**: `vpn -h`
+- **Version**: `vpn --version`
+
+## 🔜 Roadmap
+
+- **Multi-Server Support**: Quick-switch functionality for diverse VPS locations (e.g., Estonia 🇪🇪, Netherlands 🇳🇱).
+- **TUI Dashboard**: A terminal-based visual monitor for traffic and protocol health.
+- **Automated MTU Probing**: Future enhancement to dynamically probe the best MTU per network session.
 
 ## 🌟 Support
-If you find this tool useful, please **leave a star** to help the project grow! Every star is a huge motivation for a 9th-grade dev on a mission to Europe. 🚀
+If you find this tool useful, please **leave a star**! Every star is huge motivation for a 15-year-old dev on a mission to Europe. 🚀🦾
