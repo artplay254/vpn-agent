@@ -3,3 +3,8 @@ __pycache__/
 *.pyc
 
 .env
+
+*.log
+logs/
+
+vless.json
