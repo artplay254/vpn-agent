@@ -3,7 +3,7 @@ from pathlib import Path
 import pwd
 
 # --- Project Metadata ---
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 
 # --- Path Configuration ---
 real_user = os.environ.get("SUDO_USER") or os.environ.get("USER") or "root"
@@ -38,9 +38,12 @@ PROTOCOLS = {
     },
     "vless": {
         "conf":       BASE_DIR / "vless.json",
-        "iface":      "tun0",  # Ensure your vless.json uses 'tun0'
-        "cmd":        "xray",                  
-        "show_cmd":   "xray", # Placeholder
+        # XRay may ignore `interfaceName` and create `xray0`, `xray1`, ...
+        # `vpn_cli.py status`/connect auto-detects the active `xray*` interface.
+        "iface":      "xray0",
+        # The protocol is VLESS, implemented by the `xray` binary.
+        "cmd":        "xray",
+        "show_cmd":   "xray",  # Placeholder
         "label":      "VLESS Reality",
         "obfuscated": True,
     }

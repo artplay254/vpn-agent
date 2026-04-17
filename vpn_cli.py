@@ -86,6 +86,25 @@ def _tcp_check(dest_ip: str, port: int, timeout_s: float = 2.0) -> tuple[bool, s
     except Exception as e:
         return False, str(e)
 
+
+def get_public_ip(timeout_s: float = 3.0) -> str:
+    """
+    Best-effort public IP lookup with short timeouts.
+    """
+    candidates = [
+        ["curl", "-fsS", "--max-time", str(timeout_s), "https://api.ipify.org"],
+        ["curl", "-fsS", "--max-time", str(timeout_s), "https://ifconfig.me/ip"],
+    ]
+    for cmd in candidates:
+        try:
+            res = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            ip = (res.stdout or "").strip()
+            if res.returncode == 0 and re.match(r"^\d+\.\d+\.\d+\.\d+$", ip):
+                return ip
+        except Exception:
+            continue
+    return "N/A"
+
 def find_best_mtu(iface: str) -> int:
     log_event(f"🔍 Optimizing MTU for {iface}...")
     for mtu in range(MTU_START, MTU_MIN - 1, -20):
@@ -262,12 +281,51 @@ def _tail_text_file(path: str, max_bytes: int = 8192) -> str:
         return ""
 
 
+def _is_xray_running() -> bool:
+    return subprocess.run(["pgrep", "-x", "xray"], capture_output=True).returncode == 0
+
+
+def _find_active_xray_iface() -> str | None:
+    """
+    XRay may ignore `interfaceName` and create `xray0`, `xray1`, ...
+    Detect the active one by checking which `xray*` link is used by routing.
+    """
+    links = sorted([n for n in _list_links() if n.startswith("xray")])
+    if not links:
+        return None
+
+    for n in links:
+        if _route_uses_iface(CHECK_IP, n):
+            return n
+
+    # Fallback: if there's exactly one xray interface, assume it's the active one.
+    if len(links) == 1:
+        return links[0]
+    return None
+
+
+def _internet_ok(name: str, proto: dict) -> bool:
+    if proto.get("cmd") == "xray":
+        ok, _ = _tcp_check(CHECK_IP, 443, timeout_s=2.0)
+        return ok
+    return is_internet_up(proto["iface"])
+
+
 def get_active_vpn():
-    for name in FALLBACK_ORDER:
+    # Detect kernel-interface VPNs first.
+    for name in [n for n in FALLBACK_ORDER if n != "vless"]:
         proto = PROTOCOLS[name]
         ok, _ = run_cmd(["ip", "link", "show", proto["iface"]])
         if ok:
             return name, proto
+
+    # Detect XRay VLESS Reality.
+    if "vless" in PROTOCOLS and _is_xray_running():
+        iface = _find_active_xray_iface()
+        if iface:
+            proto = dict(PROTOCOLS["vless"])
+            proto["iface"] = iface
+            return "vless", proto
     return None, None
 
 def stop_all():
@@ -399,7 +457,7 @@ def daemon_mode():
         time.sleep(10)
         name, proto = get_active_vpn()
         
-        if not name or not is_internet_up(proto["iface"]):
+        if not name or not _internet_ok(name, proto):
             log_event("🔴 Connection lost! Reconnecting...")
             connect()
             continue
@@ -418,7 +476,9 @@ def show_status():
         print("Status: 🔴 Disconnected")
         return
 
-    latency = get_latency(proto["iface"])
+    latency = get_latency(proto["iface"]) if proto.get("cmd") != "xray" else "N/A"
+    public_ip = get_public_ip()
+    traffic = "OK" if _internet_ok(name, proto) else "FAIL"
     
     # FETCH CURRENT MTU
     current_mtu = "Unknown"
@@ -431,9 +491,12 @@ def show_status():
     except Exception:
         pass
 
-    print(f"Status:  🟢 Connected via {proto['label']}")
-    print(f"Latency: ⚡ {latency}")
-    print(f"MTU:     📦 {current_mtu}") # ADDED THIS
+    print(f"Status:     🟢 Connected ({name}) — {proto['label']}")
+    print(f"Interface:  {proto['iface']}")
+    print(f"Public IP:  {public_ip}")
+    print(f"Traffic:    {traffic}")
+    print(f"Latency:    ⚡ {latency}")
+    print(f"MTU:        📦 {current_mtu}")
     print("-" * 40)
     
     if proto["cmd"] != "xray":
@@ -455,16 +518,22 @@ def main():
         help="Use connect/disconnect (up/down are deprecated aliases).",
     )
     parser.add_argument(
-        "--proto",
+        "--protocol",
         choices=list(PROTOCOLS.keys()),
         help="Force a specific protocol (skips fallback order)",
+    )
+    parser.add_argument(
+        "--proto",
+        dest="protocol",
+        choices=list(PROTOCOLS.keys()),
+        help=argparse.SUPPRESS,
     )
     
     args = parser.parse_args()
 
     if args.command in ("connect", "up"):
-        if args.proto:
-            connect([args.proto])
+        if args.protocol:
+            connect([args.protocol])
         else:
             connect()
     elif args.command in ("disconnect", "down"):

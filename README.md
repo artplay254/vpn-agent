@@ -33,10 +33,13 @@ alias vpn='sudo python3 ~/.config/vpn-agent/vpn_cli.py'
 
 ```
 ## 🛠 Usage
- * vpn up — Connect with auto-protocol selection.
- * vpn status — Show active tunnel info and latency (⚡ ms).
- * vpn daemon — Run in background for health monitoring and auto-recovery.
- * vpn down — Disconnect all tunnels.
+- `vpn connect` — Connect with auto-protocol selection.
+- `vpn connect --protocol wg|awg|vless` — Force a specific protocol.
+- `vpn status` — Show active tunnel info (interface, traffic, public IP).
+- `vpn daemon` — Run in background for health monitoring and auto-recovery.
+- `vpn disconnect` — Disconnect all tunnels.
+
+Deprecated aliases (still supported): `vpn up`, `vpn down`, `--proto`.
 ## 🔜 Roadmap
 The project is under active development. Upcoming features include:
 
