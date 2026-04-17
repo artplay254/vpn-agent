@@ -12,7 +12,7 @@ GREEN='\033[0;32m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-echo -e "${BLUE}=== VPN-Agent Server Setup v0.2.0 ===${NC}"
+echo -e "${BLUE}=== VPN-Agent Server Setup v0.2.1 ===${NC}"
 
 # 1. Root Check
 if [ "$EUID" -ne 0 ]; then 

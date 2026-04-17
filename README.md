@@ -57,10 +57,10 @@ alias vpn='sudo python3 ~/.config/vpn-agent/vpn_cli.py'
 - **Disconnect alias**: `vpn down`
 
 ### Options
-- **Force protocol**: `--proto {wg,awg,vless}`
-  - **Force WireGuard**: `vpn connect --proto wg`
-  - **Force AmneziaWG**: `vpn connect --proto awg`
-  - **Force VLESS (XRay)**: `vpn connect --proto vless`
+- **Force protocol**: `--protocol {wg,awg,vless}`
+  - **Force WireGuard**: `vpn connect --protocol wg`
+  - **Force AmneziaWG**: `vpn connect --protocol awg`
+  - **Force VLESS (XRay)**: `vpn connect --protocol vless`
 
 ### Version/help
 - **Help**: `vpn -h`
