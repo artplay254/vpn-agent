@@ -9,6 +9,7 @@ A lightweight, intelligent Python CLI for Linux (Arch/Ubuntu) that manages a mul
   2. **AmneziaWG**: Falls back to obfuscated headers if standard WG is handshake-blocked.
   3. **VLESS + Reality**: The final "stealth" layer for extreme DPI environments, masking traffic as standard HTTPS.
 - **Auto-Recovery (Daemon)**: Monitors connection health in the background. If the network block is lifted, the daemon can automatically revert to standard WireGuard to minimize overhead.
+
 - **Safe daemon locking**: Prevents multiple `vpn daemon` instances from running at once with a PID lock file.
 - **Config + dependency validation**: Validates `client_wg.conf`, `client_awg.conf`, `vless.json`, and required binaries before attempting a connection.
 - **Self-Healing Infrastructure**:
@@ -17,7 +18,16 @@ A lightweight, intelligent Python CLI for Linux (Arch/Ubuntu) that manages a mul
   - **Kernel-Level IPv4 Force**: Ensures TUN interfaces are properly initialized with an IP and set to `UP` state on Arch Linux.
 - **Advanced Monitoring**:
   - **TCP Handshake Validation**: Verifies real-world connectivity via `1.1.1.1:443` instead of unreliable ICMP pings.
-  - **Dual Logging**: Separate streams for `agent.log` (management) and `xray.log` (core).
+  - # **Dual Logging**: Separate streams for `agent.log` (management) and `xray.log` (core).
+- **Self-Healing Infrastructure**:
+  - **Adaptive MTU Management**: Automatically forces optimized MTU settings (e.g., 1400) during the connection phase to prevent packet fragmentation on mobile carriers.
+  - **Dynamic Interface Detection**: Real-time detection of TUN devices (like `xray0`/`xray1`) to handle Xray's dynamic naming conventions.
+  - **Kernel-Level IPv4 Force**: Ensures TUN interfaces are properly initialized with an IP and set to `UP` state on Arch Linux.
+- **Advanced Monitoring & Status**:
+  - **Real-Time Visibility**: `status` now reports the active protocol, the specific interface name, and your current **Public IP**.
+  - **Traffic Validation**: Separates process status from data flow with a **Traffic: OK/FAIL** indicator verified via TCP handshakes to `1.1.1.1:443`.
+  - **Dual Logging**: Separate streams for `agent.log` (management logic) and `xray.log` (core output).
+
 - **English-First CLI**: Professional interface designed for developers.
 
 ## 🚀 Installation
@@ -49,6 +59,9 @@ cd ~/.config/vpn-agent
 
 Add this to your ~/.zshrc or ~/.bashrc:
 
+=======
+Add this to your `~/.zshrc` or `~/.bashrc`:
+
 ```bash
 alias vpn='sudo python3 ~/.config/vpn-agent/vpn_cli.py'
 ```
@@ -65,7 +78,16 @@ alias vpn='sudo python3 ~/.config/vpn-agent/vpn_cli.py'
 ### Deprecated aliases (still supported)
 
 - **Connect alias**: `vpn up`
-- **Disconnect alias**: `vpn down`
+- # **Disconnect alias**: `vpn down`
+- **Connect**: `vpn connect` (Successor to `up`)
+- **Disconnect**: `vpn disconnect` (Successor to `down`)
+- **Status**: `vpn status` (Now includes Public IP and Traffic verification)
+- **Daemon**: `vpn daemon`
+
+### Deprecated Aliases (Still Supported)
+
+- `vpn up` -> `vpn connect`
+- `vpn down` -> `vpn disconnect`
 
 ### Notes
 
@@ -85,8 +107,13 @@ If you want the daemon to run as a service, create a systemd unit that runs `vpn
 
 ### Version/help
 
+=======
+
+- **Force Protocol**: `--protocol {wg,awg,vless}`
+  - Example: `vpn connect --protocol vless`
+
 - **Help**: `vpn -h`
-- **Version**: `vpn --version`
+- **Version**: `vpn --version` (v0.2.1)
 
 ## 🔜 Roadmap
 
