@@ -1,4 +1,4 @@
-# 🛡️ VPN-Agent (v0.3.0) — The "Evolution" Update
+# 🛡️ VPN-Agent
 
 **A self-learning, multi-protocol VPN manager designed to stay invisible and resilient against DPI.**
 
