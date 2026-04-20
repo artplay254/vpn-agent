@@ -1,4 +1,4 @@
-# 🛡️ VPN-Agent
+# 🛡️ VPN-Agent v0.4.0
 
 A lightweight, intelligent Python CLI for Linux (Arch/Ubuntu) that manages a multi-layer defense against DPI. It automatically navigates through **WireGuard**, **AmneziaWG**, and **VLESS Reality** to ensure you stay connected.
 
@@ -18,15 +18,9 @@ A lightweight, intelligent Python CLI for Linux (Arch/Ubuntu) that manages a mul
   - **Kernel-Level IPv4 Force**: Ensures TUN interfaces are properly initialized with an IP and set to `UP` state on Arch Linux.
 - **Advanced Monitoring**:
   - **TCP Handshake Validation**: Verifies real-world connectivity via `1.1.1.1:443` instead of unreliable ICMP pings.
-  - # **Dual Logging**: Separate streams for `agent.log` (management) and `xray.log` (core).
-- **Self-Healing Infrastructure**:
-  - **Adaptive MTU Management**: Automatically forces optimized MTU settings (e.g., 1400) during the connection phase to prevent packet fragmentation on mobile carriers.
-  - **Dynamic Interface Detection**: Real-time detection of TUN devices (like `xray0`/`xray1`) to handle Xray's dynamic naming conventions.
-  - **Kernel-Level IPv4 Force**: Ensures TUN interfaces are properly initialized with an IP and set to `UP` state on Arch Linux.
-- **Advanced Monitoring & Status**:
-  - **Real-Time Visibility**: `status` now reports the active protocol, the specific interface name, and your current **Public IP**.
-  - **Traffic Validation**: Separates process status from data flow with a **Traffic: OK/FAIL** indicator verified via TCP handshakes to `1.1.1.1:443`.
-  - **Dual Logging**: Separate streams for `agent.log` (management logic) and `xray.log` (core output).
+  - **Persistent SQLite Database**: All connection metrics are stored in a local SQLite database (`agent_brain.db`) for reliable long-term performance tracking and intelligent config selection.
+  - **Reliability Scoring**: Uses weighted success rate (70%) and latency factor (30%) to automatically select the best configuration for each network context.
+  - **Dual Logging**: Separate streams for `agent.log` (management) and `xray.log` (core).
 
 - **English-First CLI**: Professional interface designed for developers.
 
@@ -73,6 +67,7 @@ alias vpn='sudo python3 ~/.config/vpn-agent/vpn_cli.py'
 - **Connect (preferred)**: `vpn connect`
 - **Disconnect (preferred)**: `vpn disconnect`
 - **Status**: `vpn status`
+- **Stats**: `vpn stats`
 - **Daemon**: `vpn daemon`
 
 ### Deprecated aliases (still supported)

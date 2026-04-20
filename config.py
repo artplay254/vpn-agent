@@ -5,10 +5,11 @@ import random
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 import pwd
 
 # --- Project Metadata ---
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 
 # --- Path Configuration ---
 real_user = os.environ.get("SUDO_USER") or os.environ.get("USER") or "root"
@@ -123,7 +124,9 @@ class ConfigMutator:
             return {}
 
     def _save_index(self, index: dict) -> None:
-        VARIANT_INDEX_FILE.write_text(json.dumps(index, indent=2), encoding="utf-8")
+        temp_file = VARIANT_INDEX_FILE.with_suffix('.tmp')
+        temp_file.write_text(json.dumps(index, indent=2), encoding="utf-8")
+        temp_file.replace(VARIANT_INDEX_FILE)
 
     def _ensure_protocol_index(self, index: dict) -> dict:
         if self.protocol not in index:
@@ -193,22 +196,6 @@ class ConfigMutator:
                 pass
         return None
 
-    def generate_random_variant(self, params: dict | None = None) -> ConfigVariant:
-        params = params or self._random_params()
-        content = self._build_variant_content(params)
-        config_hash = self.compute_hash(content)
-        existing_path = self.find_variant_path(config_hash)
-        if existing_path is not None:
-            alias = self._alias_for_hash(config_hash) or existing_path.stem
-            return ConfigVariant(self.protocol, existing_path, alias, config_hash, params)
-
-        index = self._load_index()
-        alias = self._next_alias(index)
-        variant_path = CONFIG_VARIANT_DIR / f"{alias}{self.extension}"
-        variant_path.write_text(content, encoding="utf-8")
-        self._register_variant(alias, config_hash)
-        return ConfigVariant(self.protocol, variant_path, alias, config_hash, params)
-
     def _random_params(self) -> dict:
         if self.protocol == "awg":
             jmin = random.randint(*AWG_JMIN_RANGE)
@@ -229,6 +216,96 @@ class ConfigMutator:
                 "mtu": random.randrange(VLESS_MTU_RANGE[0], VLESS_MTU_RANGE[1] + 1, MTU_STEP),
             }
         return {}
+
+    def _guided_mtu(self, current_mtu: int, current_score: float, previous_mtu: int | None, previous_score: float | None) -> int:
+        if previous_mtu is not None and previous_score is not None:
+            if current_score > previous_score:
+                if current_mtu < previous_mtu:
+                    return max(MTU_MIN, current_mtu - 20)
+                return min(MTU_START, current_mtu + 20)
+            return min(MTU_START, max(MTU_MIN, current_mtu + 20))
+
+        return random.randrange(MTU_MIN, MTU_START + 1, 20)
+
+    def _choose_vless_port(self, network_id: str, db) -> int:
+        risky_ports = set(db.get_risky_ports(network_id))
+        safe_options = [p for p in VLESS_PORT_OPTIONS if p not in risky_ports]
+        if safe_options:
+            return random.choice(safe_options)
+
+        common_ports = [443, 8443, 10443, 4433, 80, 8080, 1194, 51820]
+        safe_common = [p for p in common_ports if p not in risky_ports]
+        if safe_common:
+            return random.choice(safe_common)
+
+        for base in [443, 80, 1194, 51820]:
+            for delta in (0, 100, 200, 300):
+                candidate = base + delta
+                if 1024 <= candidate <= 65535 and candidate not in risky_ports:
+                    return candidate
+
+        return random.choice([p for p in range(1024, 65536, 100) if p not in risky_ports] or [random.choice(VLESS_PORT_OPTIONS)])
+
+    def _guided_params(self, network_id: str, parent_hash: str, db) -> Optional[dict]:
+        try:
+            history = db.get_parent_and_previous_scores(network_id, parent_hash)
+        except Exception:
+            history = None
+
+        if not history:
+            return None
+
+        parent_entry, parent_score, previous_entry, previous_score = history
+        current_mtu = parent_entry.mtu
+        previous_mtu = previous_entry.mtu if previous_entry else None
+
+        if self.protocol == "awg":
+            mtu = self._guided_mtu(current_mtu, parent_score, previous_mtu, previous_score)
+            jmin = random.randint(*AWG_JMIN_RANGE)
+            jmax = random.randint(max(jmin + 10, AWG_JMAX_RANGE[0]), AWG_JMAX_RANGE[1])
+            return {
+                "MTU": mtu,
+                "Jc": random.randint(*AWG_JC_RANGE),
+                "Jmin": jmin,
+                "Jmax": jmax,
+            }
+
+        if self.protocol == "wg":
+            mtu = self._guided_mtu(current_mtu, parent_score, previous_mtu, previous_score)
+            return {"MTU": mtu}
+
+        if self.protocol == "vless":
+            mtu = self._guided_mtu(current_mtu, parent_score, previous_mtu, previous_score)
+            return {
+                "port": self._choose_vless_port(network_id, db),
+                "mtu": mtu,
+            }
+
+        return None
+
+    def generate_random_variant(self, params: dict | None = None, network_id: str | None = None,
+                                parent_hash: str | None = None, db: Optional[object] = None) -> ConfigVariant:
+        params = params or {}
+        if not params:
+            if db is not None and network_id and parent_hash and random.random() >= 0.2:
+                guided = self._guided_params(network_id, parent_hash, db)
+                params = guided or self._random_params()
+            else:
+                params = self._random_params()
+
+        content = self._build_variant_content(params)
+        config_hash = self.compute_hash(content)
+        existing_path = self.find_variant_path(config_hash)
+        if existing_path is not None:
+            alias = self._alias_for_hash(config_hash) or existing_path.stem
+            return ConfigVariant(self.protocol, existing_path, alias, config_hash, params)
+
+        index = self._load_index()
+        alias = self._next_alias(index)
+        variant_path = CONFIG_VARIANT_DIR / f"{alias}{self.extension}"
+        variant_path.write_text(content, encoding="utf-8")
+        self._register_variant(alias, config_hash)
+        return ConfigVariant(self.protocol, variant_path, alias, config_hash, params)
 
     def _build_variant_content(self, params: dict) -> str:
         template_text = self._read_template()

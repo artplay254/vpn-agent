@@ -1,25 +1,4 @@
 #!/usr/bin/env python3
-"""
-VPN-Agent CLI Tool
-
-This is the main command-line interface for VPN-Agent, a tool that manages
-multi-layer VPN connections with automatic fallback to bypass DPI censorship.
-
-It supports three protocols in fallback order:
-1. WireGuard (standard)
-2. AmneziaWG (obfuscated WireGuard)
-3. VLESS Reality (via XRay, masks as HTTPS)
-
-Features:
-- Automatic protocol fallback on connection failure
-- Daemon mode for auto-recovery
-- MTU optimization for mobile carriers
-- TCP-based connectivity checks (bypasses ICMP blocks)
-- PID-based locking to prevent multiple daemons
-- Comprehensive logging and status reporting
-
-Usage: sudo python3 vpn_cli.py <command> [--protocol <proto>]
-"""
 
 import subprocess
 import time
@@ -27,9 +6,22 @@ import os
 import sys
 import argparse
 import re
-import logging
+import logging.handlers
 import shutil
 import signal
+
+try:
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.table import Table
+    from rich.live import Live
+    from rich.status import Status
+    from rich.text import Text
+    RICH_AVAILABLE = True
+    console = Console()
+except ImportError:
+    RICH_AVAILABLE = False
+    console = None
 
 import json
 import socket
@@ -38,30 +30,49 @@ import hashlib
 from config import (
     VERSION, PROTOCOLS, FALLBACK_ORDER, CHECK_IP,
     CONNECT_WAIT, WG_ATTEMPTS, RECOVERY_CHECK, LOG_FILE,
-    MTU_START, MTU_MIN,
+    MTU_START, MTU_MIN, MTU_MAX,
     XRAY_LOG_FILE, XRAY_PID_FILE, DAEMON_PID_FILE,
     CONNECTION_METRICS_LOG, ConfigMutator,
 )
 from brain import Brain
+from database import BrainDatabase
+from prober import probe_mtu
 
 # ─── SETUP LOGGING ────────────────────────────────────────────────────────────
 # Configure logging to write to agent.log file with timestamps
-logging.basicConfig(
-    filename=LOG_FILE,
-    level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
+handler = logging.handlers.RotatingFileHandler(
+    LOG_FILE, maxBytes=10*1024*1024, backupCount=3  # 10MB, keep 3 backups
 )
+handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(message)s', datefmt='%Y-%m-%d %H:%M:%S'))
+logging.getLogger().addHandler(handler)
+logging.getLogger().setLevel(logging.INFO)
 
-def log_event(message, level="info"):
-    """Sync output to terminal and agent.log
-    
-    This function prints the message to stdout and also logs it to the file.
-    Level can be "info" or "error" to control logging level.
+def _console_print(message: str, style: str | None = None) -> None:
+    if RICH_AVAILABLE and console is not None:
+        console.print(message, style=style)
+    else:
+        print(message)
+
+
+def log_event(message: str, level: str = "info") -> None:
+    """Sync output to terminal and agent.log.
+
+    If Rich is available, prints styled terminal output. Always writes a plain
+    text copy to the rotating log file.
     """
-    print(message)
+    style = {
+        "info": None,
+        "success": "green",
+        "warning": "yellow",
+        "error": "red bold",
+    }.get(level, None)
+
+    _console_print(message, style=style)
+
     if level == "error":
         logging.error(message)
+    elif level == "warning":
+        logging.warning(message)
     else:
         logging.info(message)
 
@@ -76,10 +87,80 @@ def compute_config_hash(config_path: str | os.PathLike) -> str:
         return "unknown"
 
 
-def log_connection_metrics(protocol: str, config_hash: str, mtu: int, latency: str, 
+def render_connection_panel(network_id: str,
+                            protocol_label: str,
+                            reliability_score: float | None,
+                            handshake_status: str) -> Panel | None:
+    if not RICH_AVAILABLE or console is None:
+        return None
+
+    table = Table.grid(padding=(0, 1))
+    table.add_column(style="bold white", width=16)
+    table.add_column(style="white")
+
+    table.add_row("Network ID", network_id)
+    table.add_row("Protocol", protocol_label)
+    table.add_row("Reliability", f"{reliability_score:.2f}" if reliability_score is not None else "N/A")
+    table.add_row("Handshake", handshake_status)
+
+    return Panel(table, title="Connection Dashboard", border_style="cyan", expand=False)
+
+
+def display_connection_dashboard(network_id: str,
+                                 protocol_label: str,
+                                 reliability_score: float | None,
+                                 handshake_status: str) -> None:
+    if RICH_AVAILABLE and console is not None:
+        panel = render_connection_panel(network_id, protocol_label, reliability_score, handshake_status)
+        if panel is not None:
+            console.print(panel)
+            return
+
+    print("=== Connection Dashboard ===")
+    print(f"Network ID:     {network_id}")
+    print(f"Protocol:       {protocol_label}")
+    print(f"Reliability:    {reliability_score:.2f}" if reliability_score is not None else "Reliability:    N/A")
+    print(f"Handshake:      {handshake_status}")
+    print()
+
+
+def display_stats_table(stats: list[dict]) -> None:
+    if RICH_AVAILABLE and console is not None:
+        table = Table(title="VPN Network Stats", show_lines=True)
+        table.add_column("Network ID", style="bold cyan")
+        table.add_column("Best Protocol", style="magenta")
+        table.add_column("Config Alias", style="yellow")
+        table.add_column("Success Rate", justify="right", style="green")
+        table.add_column("Avg Latency", justify="right", style="white")
+        table.add_column("Reliability", justify="right", style="bright_blue")
+        for row in stats:
+            table.add_row(
+                row["network_id"],
+                row["protocol"],
+                row["config_alias"],
+                f"{row['success_rate'] * 100:.1f}%",
+                f"{row['avg_latency']:.1f} ms" if row["avg_latency"] is not None else "N/A",
+                f"{row['reliability_score']:.2f}",
+            )
+        console.print(table)
+        return
+
+    print("VPN Network Stats")
+    print("=" * 80)
+    for row in stats:
+        print(f"Network ID:    {row['network_id']}")
+        print(f"Best Protocol: {row['protocol']}")
+        print(f"Config Alias:  {row['config_alias']}")
+        print(f"Success Rate:  {row['success_rate'] * 100:.1f}%")
+        print(f"Avg Latency:   {row['avg_latency']:.1f} ms" if row['avg_latency'] is not None else "Avg Latency:   N/A")
+        print(f"Reliability:   {row['reliability_score']:.2f}")
+        print("-" * 80)
+
+
+def log_connection_metrics(db: BrainDatabase, protocol: str, config_hash: str, mtu: int, latency: str, 
                           success: bool, duration: float, port: int | None = None, 
                           error_msg: str = "", network_id: str = "network:unknown"):
-    """Log structured connection metrics in JSON format for future analysis
+    """Log structured connection metrics to SQLite database
 
     This data can be used to build success rates per configuration,
     optimize MTU/port/protocol selection, and implement intelligent fallback.
@@ -90,30 +171,40 @@ def log_connection_metrics(protocol: str, config_hash: str, mtu: int, latency: s
     - config_hash: SHA256 of config file for uniqueness
     - mtu: MTU value used (optimized for success, min for failure)
     - port: Port number (for VLESS)
-    - latency: Measured latency or "N/A"
+    - latency: Measured latency in ms or "N/A"
     - success: Boolean
     - duration: Connection attempt duration in seconds
     - error_msg: Error message if failed
     - network_id: SSID or ISP context for adaptive scoring
     """
     import time
-    metrics = {
-        "timestamp": time.time(),
-        "protocol": protocol,
-        "config_hash": config_hash,
-        "mtu": mtu,
-        "port": port,
-        "latency": latency,
-        "success": success,
-        "duration": duration,
-        "error_msg": error_msg,
-        "network_id": network_id,
-    }
-    try:
-        with open(CONNECTION_METRICS_LOG, "a", encoding="utf-8") as f:
-            f.write(json.dumps(metrics) + "\n")
-    except Exception as e:
-        log_event(f"Failed to log metrics: {e}", "error")
+    
+    # Register config if not already registered
+    config_id = db.register_config(
+        protocol=protocol,
+        config_hash=config_hash,
+        alias=f"{protocol}_{config_hash[:8]}",
+        mtu=mtu,
+        is_mutation=False  # Will be updated when mutations are registered
+    )
+    
+    # Parse latency
+    latency_value = None
+    if latency != "N/A":
+        match = re.search(r"(\d+(?:\.\d+)?)", latency)
+        if match:
+            latency_value = float(match.group(1))
+    
+    # Log the attempt
+    db.log_attempt(
+        config_id=config_id,
+        timestamp=time.time(),
+        network_id=network_id,
+        success=success,
+        latency=latency_value,
+        error_type=error_msg if error_msg else None,
+        port=port
+    )
 
 def find_binary(name: str) -> str | None:
     """Find the full path to a binary using shutil.which
@@ -277,6 +368,14 @@ def stop_xray() -> None:
     if pid and is_process_running(pid):
         try:
             os.kill(pid, signal.SIGTERM)
+            # Wait up to 5 seconds for process to terminate
+            for _ in range(50):
+                if not is_process_running(pid):
+                    break
+                time.sleep(0.1)
+            if is_process_running(pid):
+                log_event(f"XRay pid={pid} did not terminate gracefully, sending SIGKILL", "error")
+                os.kill(pid, signal.SIGKILL)
             log_event(f"Stopped XRay process pid={pid}.")
         except Exception as e:
             log_event(f"Failed to stop XRay pid={pid}: {e}", "error")
@@ -389,7 +488,7 @@ def find_best_mtu(iface: str) -> int:
                 ["ping", "-c", "1", "-W", "1", "-M", "do", "-s", str(mtu - 28), CHECK_IP],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
             )
-            log_event(f"✅ Optimal MTU found: {mtu}")
+            log_event(f"✅ Optimal MTU found: {mtu}", "success")
             return mtu
         except subprocess.CalledProcessError:
             continue
@@ -538,7 +637,7 @@ def _ensure_iface_ipv4_from_xray_conf(iface: str, xray_conf_path: str) -> bool:
                 out4 = subprocess.check_output(["ip", "-4", "addr", "show", "dev", iface], text=True)
             except Exception as e:
                 out4 = f"<failed to read ipv4 addr: {e}>"
-            log_event(f"✅ {iface} IPv4 present:\n{out4}")
+            log_event(f"✅ {iface} IPv4 present:\n{out4}", "success")
             return True
 
         run_cmd(["ip", "link", "set", "dev", iface, "up"])
@@ -667,6 +766,7 @@ def connect(order: list[str] | None = None):
     log_event("--- New Connection Session Started ---")
 
     brain = Brain()
+    db = brain.db  # Get database instance from brain
     network_id = brain.detect_network_id()
     order = order or FALLBACK_ORDER
     order = brain.recommend_protocol_order(network_id, order)
@@ -678,6 +778,25 @@ def connect(order: list[str] | None = None):
     if not order:
         log_event("No valid protocols are available. Check your configs and required binaries.", "error")
         return None
+
+    optimized_mtu = db.get_network_mtu(network_id)
+    if optimized_mtu is not None:
+        log_event(f"🧠 Cached MTU for {network_id}: {optimized_mtu}")
+    else:
+        try:
+            log_event(f"🧪 Probing MTU for {network_id}...")
+            optimized_mtu = probe_mtu(CHECK_IP, MTU_MIN, MTU_MAX)
+            db.save_network_mtu(network_id, optimized_mtu)
+            log_event(f"✅ Discovered MTU for {network_id}: {optimized_mtu}", "success")
+        except PermissionError as e:
+            log_event(f"⚠️ {e}", "error")
+            optimized_mtu = None
+        except RuntimeError as e:
+            log_event(f"⚠️ {e}", "error")
+            optimized_mtu = None
+        except FileNotFoundError as e:
+            log_event(f"⚠️ {e}", "error")
+            optimized_mtu = None
 
     for name in order:
         proto = dict(PROTOCOLS[name])
@@ -692,15 +811,47 @@ def connect(order: list[str] | None = None):
             else:
                 log_event(f"🧠 Best historic {name} variant {best_hash[:8]} is missing locally. Using default config.")
 
+        reliability_score = None
+        if best_hash:
+            score_data = db.get_config_score(best_hash, network_id)
+            reliability_score = score_data[0] if score_data else None
+
+        display_connection_dashboard(
+            network_id,
+            proto["label"],
+            reliability_score,
+            "Preparing handshake...",
+        )
+
         tried_mutation = False
         for phase in range(2):
             if phase == 1:
                 if tried_mutation:
                     break
                 try:
-                    mutation = mutator.generate_random_variant()
+                    current_parent_hash = compute_config_hash(proto["conf"])
+                    mutation_params = {}
+                    if optimized_mtu is not None:
+                        mutation_params["mtu" if name == "vless" else "MTU"] = optimized_mtu
+                    mutation = mutator.generate_random_variant(
+                        params=mutation_params or None,
+                        network_id=network_id,
+                        parent_hash=current_parent_hash,
+                        db=db
+                    )
                     proto["conf"] = mutation.path
                     log_event(f"🧬 Generated mutant variant for {name}: {mutation.config_hash[:8]}")
+                    
+                    # Register the mutation in database
+                    db.register_config(
+                        protocol=name,
+                        config_hash=mutation.config_hash,
+                        alias=mutation.alias,
+                        mtu=mutation.params.get("mtu", MTU_MIN),
+                        is_mutation=True,
+                        parent_hash=current_parent_hash
+                    )
+                    
                     tried_mutation = True
                 except Exception as e:
                     log_event(f"⚠️ Could not generate variant for {name}: {e}", "error")
@@ -712,6 +863,9 @@ def connect(order: list[str] | None = None):
                 retry_str = f" [Attempt {i}/{attempts}]" if attempts > 1 else ""
                 log_event(f"🚀{retry_str} Trying {proto['label']}...")
 
+                handshake_status = f"Attempt {i}/{attempts} — Handshake in progress"
+                display_connection_dashboard(network_id, proto["label"], reliability_score, handshake_status)
+
                 config_hash = compute_config_hash(proto["conf"])
                 port = _read_xray_port(str(proto["conf"])) if name == "vless" else None
                 mtu = MTU_MIN
@@ -720,6 +874,7 @@ def connect(order: list[str] | None = None):
 
                 def record_metrics(success: bool, mtu: int, latency: str, duration: float, error_msg: str = ""):
                     log_connection_metrics(
+                        db,
                         name,
                         config_hash,
                         mtu,
@@ -782,6 +937,8 @@ def connect(order: list[str] | None = None):
                             raise RuntimeError("Could not determine default gateway")
 
                         server_ip = _read_xray_server_ip(str(proto["conf"])) or "151.245.216.157"
+                        if server_ip == "151.245.216.157":
+                            log_event("⚠️  Using fallback server IP for routing. Config may be invalid.", "error")
                         ok1, err1 = run_cmd(["ip", "route", "replace", server_ip, "via", gateway])
                         ok2, err2 = run_cmd(["ip", "route", "replace", "default", "dev", proto["iface"], "metric", "50"])
                         if not ok1 or not ok2:
@@ -812,13 +969,15 @@ def connect(order: list[str] | None = None):
                         ok_up = is_internet_up(proto["iface"])
 
                     if ok_up:
-                        log_event(f"✅ {proto['label']} active.")
+                        display_connection_dashboard(network_id, proto['label'], reliability_score, "Handshake successful")
+                        log_event(f"✅ {proto['label']} active.", "success")
                         best_mtu = find_best_mtu(proto["iface"])
                         apply_mtu(proto["iface"], best_mtu)
                         latency = get_latency(proto["iface"]) if proto["cmd"] != "xray" else "N/A"
                         record_metrics(True, best_mtu, latency, time.time() - start_time)
                         return name
 
+                    display_connection_dashboard(network_id, proto['label'], reliability_score, "Handshake failed")
                     log_event(f"⚠️  {proto['label']} failed to pass traffic.", "error")
                     record_metrics(False, MTU_MIN, "N/A", time.time() - start_time, "traffic check failed")
                     stop_all()
@@ -913,6 +1072,16 @@ def show_status():
         result = subprocess.run([proto["show_cmd"], "show", proto["iface"]], capture_output=True, text=True)
         print(result.stdout.strip())
 
+
+def show_stats() -> None:
+    """Display summarized historical stats for known networks."""
+    brain = Brain()
+    stats = brain.db.get_network_stats()
+    if not stats:
+        log_event("No network statistics available yet. Connect at least once to populate metrics.", "warning")
+        return
+    display_stats_table(stats)
+
 # ─── ENTRY POINT ──────────────────────────────────────────────────────────────
 
 def main():
@@ -929,8 +1098,8 @@ def main():
     parser.add_argument("-v", "--version", action="version", version=f"VPN-Agent {VERSION}")
     parser.add_argument(
         "command",
-        choices=["connect", "disconnect", "status", "daemon", "up", "down"],
-        help="Use connect/disconnect (up/down are deprecated aliases).",
+        choices=["connect", "disconnect", "status", "daemon", "stats", "up", "down"],
+        help="Use connect/disconnect/stats (up/down are deprecated aliases).",
     )
     parser.add_argument(
         "--protocol",
@@ -956,6 +1125,8 @@ def main():
         log_event("🛑 VPN Disconnected.")
     elif args.command == "status":
         show_status()
+    elif args.command == "stats":
+        show_stats()
     elif args.command == "daemon":
         daemon_mode()
 
@@ -963,4 +1134,7 @@ if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        print("\n🛑 Stopped.")
+        if RICH_AVAILABLE and console is not None:
+            console.print("\n🛑 Stopped.", style="yellow")
+        else:
+            print("\n🛑 Stopped.")

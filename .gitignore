@@ -5,6 +5,10 @@ __pycache__/
 .env
 
 *.log
+*.db
+*.bak
+*.tmp
+*.swp
 logs/
 
 vless.json
