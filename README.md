@@ -1,106 +1,111 @@
 # 🛡️ VPN-Agent
 
-**An adaptive, self-learning VPN orchestrator designed to maintain persistent connectivity in high-censorship environments through protocol evolution.**
+**A smart, self-learning VPN manager that automatically dodges network blocks to keep you connected.**
 
-VPN-Agent is an intelligent CLI manager that treats internet censorship as a dynamic problem. Unlike static VPN clients, it utilizes a **Genetic Mutation Engine**, **Binary Search Probing**, and **SQLite Analytics** to navigate through Deep Packet Inspection (DPI) and protocol-based blocking.
+Standard VPN clients are dumb: if a network blocks their protocol, they just fail. **VPN-Agent** is different. It acts like a digital lockpicker. If a firewall blocks your connection, the Agent analyzes the block, tweaks its settings, and tries again until it breaks through.
 
----
-
-## 🏗️ System Architecture & Logic
-
-VPN-Agent acts as a high-level orchestrator sitting above low-level protocol binaries. It manages the lifecycle of connections by interfacing with the Linux network stack and a persistent data "Brain."
-
-
-
-### 1. The Controller (`vpn_cli.py`)
-The entry point. It manages user commands, validates the environment, and coordinates between the Database and the Mutator.
-
-### 2. The Brain (`database.py`)
-A persistent **SQLite** backend that tracks every connection attempt.
-* **Network Fingerprinting**: Identifies networks by SSID or ISP gateway.
-* **Scoring Algorithm**: Ranks configurations using a weighted formula:
-  **Reliability Score** = $(Success Rate \times 0.7) + (Latency Factor \times 0.3)$.
-
-### 3. The Recon Engine (`prober.py`)
-Before connecting to a new network, the Agent performs **Binary Search MTU Probing**. It sends a series of ICMP/UDP packets with the `DF` (Don't Fragment) bit set to find the exact physical MTU limit of the current path, preventing handshake failures before they happen.
-
-### 4. The Evolutionary Logic (`config.py`)
-When standard protocols are blocked, the **Guided Mutation** engine triggers. It analyzes past failures and shifts parameters (MTU, Junk packet size, obfuscation headers) in the direction of most recent success, creating "variants" that evolve to bypass the firewall.
+It remembers what works and what doesn't, so every time you connect, it gets faster and smarter.
 
 ---
 
-## 🛠 Installation Guide
+## 👁️ Visualizing the Logic
 
-### 1. Server-Side Setup
-Deploy the multi-protocol stack (WireGuard, AmneziaWG, and Xray-core) on a clean **Ubuntu 24.04** VPS:
+Here is exactly how the Agent thinks when you type `vpn connect`:
 
+```mermaid
+graph TD
+    A[Start: vpn connect] --> B{Have I seen this WiFi/Network before?}
+    
+    B -- No --> C[🔍 Probe Network Limits MTU]
+    C --> D[Save to Database]
+    
+    B -- Yes --> E[🧠 Ask Database: What is the best config here?]
+    D --> E
+    
+    E --> F[🚀 Try to Connect]
+    F --> G{Did it work?}
+    
+    G -- Yes! --> H[✅ Save Success Score & Monitor]
+    G -- Blocked! --> I[🧬 Guided Mutation Engine]
+    
+    I --> J[Change MTU, Ports, or Obfuscation]
+    J --> F
+```
+
+---
+
+## 🧠 How It Works (The Core Features)
+
+### 1. The Brain (SQLite Database)
+Instead of guessing, the Agent remembers. It saves every connection attempt into a local database (`agent_brain.db`). 
+* If **VLESS** works best at your school, but **WireGuard** is faster at home, the Agent will automatically switch to the right protocol depending on where you are.
+* It calculates a "Reliability Score" for every config based on success rate and ping.
+
+### 2. Guided Mutation (The Evolution)
+When the firewall blocks your connection, the Agent triggers a "Mutation." 
+* It doesn't just pick random numbers. If dropping the packet size (MTU) made the connection *almost* work last time, it will keep dropping it until it finds the sweet spot. 
+* It changes ports, MTU sizes, and "Junk" packet headers to disguise your traffic.
+
+### 3. Smart Network Scanner (MTU Probing)
+Before connecting to a new network, the Agent sends a few lightning-fast test packets. It automatically figures out the maximum packet size (MTU) the network allows. This prevents those annoying moments where the VPN says "Connected" but no websites load.
+
+---
+
+## 🛠 The Arsenal (Protocols)
+
+VPN-Agent uses three layers of defense. If one gets blocked, it falls back to the next:
+
+| Protocol | What it does | When to use it |
+| :--- | :--- | :--- |
+| **WireGuard** | Pure speed. | Home WiFi, gaming, streaming. |
+| **AmneziaWG** | Disguises the handshake with "Junk" packets. | Public WiFi or ISPs that block standard WireGuard. |
+| **VLESS + Reality** | Masks your traffic to look like regular HTTPS web browsing. | Strict firewalls, school networks, heavy censorship. |
+
+---
+
+## 💻 Installation
+
+### 1. Server Setup (The Easy Way)
+Grab a clean **Ubuntu 24.04** VPS and run this script. It will automatically install all three protocols and spit out your config files.
 ```bash
 wget https://raw.githubusercontent.com/artplay254/vpn-agent/main/setup_server.sh
 chmod +x setup_server.sh
 sudo ./setup_server.sh
 ```
-*Save the generated config files (WG, AWG, and VLESS) for the client setup.*
 
-### 2. Client-Side Dependencies
-The Agent requires the underlying protocol binaries to be installed on your local machine.
-
-**For Arch Linux:**
-```bash
-# Core protocols and tools
-sudo pacman -S wireguard-tools xray iproute2 sqlite
-
-# AmneziaWG (requires DKMS or pre-built kernel module)
-# Use an AUR helper like yay or paru
-yay -S amneziawg-tools-git amneziawg-dkms-git
-```
-
-**Python Environment:**
-```bash
-pip install rich
-```
-
-### 3. Client Installation
+### 2. Client Setup (Linux/Arch)
+Clone the tool to your machine:
 ```bash
 git clone https://github.com/artplay254/vpn-agent ~/.config/vpn-agent
 cd ~/.config/vpn-agent
+pip install rich  # Required for the beautiful terminal UI
 mkdir variants logs
 ```
 
-### 4. Configuration
-Place your server-generated files into `~/.config/vpn-agent/`:
-* `client_wg.conf`
-* `client_awg.conf`
-* `vless.json`
+### 3. Add Your Configs
+Take the files the server gave you (`client_wg.conf`, `client_awg.conf`, `vless.json`) and drop them into the `~/.config/vpn-agent/` folder.
 
-**Set Capabilities:**
-Allow Xray to manage network interfaces without needing full `sudo` for every packet operation:
+**Crucial Step for Linux Users:** Give the VPN engine permission to manage your network so you don't have to type `sudo` for every little thing:
 ```bash
 sudo setcap "cap_net_admin,cap_net_bind_service+ep" $(which xray)
 ```
 
 ---
 
-## ⌨️ Command Reference
+## ⌨️ Command List
 
-| Command | Action | Technical Detail |
-| :--- | :--- | :--- |
-| `vpn connect` | **Intelligent Connect** | Probes MTU $\rightarrow$ Queries Brain $\rightarrow$ Executes Protocol. |
-| `vpn disconnect` | **Clean Exit** | Tears down TUN/TAP, flushes routes, and kills PIDs. |
-| `vpn stats` | **Analytics** | Displays SQLite data: Best configs per network & ISP. |
-| `vpn status` | **Live Monitor** | Real-time traffic flow and handshake validation. |
-| `vpn daemon` | **Auto-Pilot** | Background monitoring with auto-mutation on block. |
-
----
-
-## 🧬 Advanced Features
-
-* **WAL-Mode Persistence**: SQLite uses Write-Ahead Logging for high-performance concurrent metric tracking.
-* **Atomic Config Management**: Variants are written using temporary files to prevent corruption during system crashes.
-* **SIGTERM/SIGKILL Lifecycle**: Clean process management ensures no "zombie" Xray or WireGuard processes remain after disconnection.
-* **TCP Handshake Validation**: The Agent verifies internet health by attempting a real TLS handshake to `1.1.1.1:443`, ensuring the VPN isn't just "up" but actually "routing."
+| Command | What it does |
+| :--- | :--- |
+| `vpn connect` | The main button. Probes the network, checks the database, and connects. |
+| `vpn disconnect` | Safely turns off the VPN and returns your internet to normal. |
+| `vpn stats` | Shows a clean table of all your networks and which configs work best. |
+| `vpn status` | Live look at your traffic, active protocol, and connection health. |
+| `vpn daemon` | Runs in the background, automatically reconnecting and mutating if you drop. |
 
 ---
 
 ## 🌟 Support
 
-Built for those who refuse to be limited by digital borders. If this tool keeps you connected, consider leaving a **star** on GitHub! 🚀🦾
+Built from the ground up by a 15-year-old developer with a **Saiyan Mindset**—constantly breaking limits to ensure digital freedom. 
+
+If this tool helped you bypass a block and stay connected, please **leave a ⭐ on GitHub!** 🚀🦾
