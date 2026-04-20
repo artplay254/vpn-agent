@@ -4,8 +4,6 @@
 
 Standard VPN clients are dumb: if a network blocks their protocol, they just fail. **VPN-Agent** is different. It acts like a digital lockpicker. If a firewall blocks your connection, the Agent analyzes the block, tweaks its settings, and tries again until it breaks through.
 
-It remembers what works and what doesn't, so every time you connect, it gets faster and smarter.
-
 ---
 
 ## 👁️ Visualizing the Logic
@@ -34,58 +32,58 @@ graph TD
 
 ---
 
-## 🧠 How It Works (The Core Features)
+## 🧠 How It Works
 
-### 1. The Brain (SQLite Database)
-Instead of guessing, the Agent remembers. It saves every connection attempt into a local database (`agent_brain.db`). 
-* If **VLESS** works best at your school, but **WireGuard** is faster at home, the Agent will automatically switch to the right protocol depending on where you are.
-* It calculates a "Reliability Score" for every config based on success rate and ping.
-
-### 2. Guided Mutation (The Evolution)
-When the firewall blocks your connection, the Agent triggers a "Mutation." 
-* It doesn't just pick random numbers. If dropping the packet size (MTU) made the connection *almost* work last time, it will keep dropping it until it finds the sweet spot. 
-* It changes ports, MTU sizes, and "Junk" packet headers to disguise your traffic.
-
-### 3. Smart Network Scanner (MTU Probing)
-Before connecting to a new network, the Agent sends a few lightning-fast test packets. It automatically figures out the maximum packet size (MTU) the network allows. This prevents those annoying moments where the VPN says "Connected" but no websites load.
+* **The Brain (SQLite):** Remembers which protocols work at school vs. home. It calculates a "Reliability Score" so it always picks the fastest, most stable option first.
+* **Guided Mutation:** If you’re blocked, the Agent "evolves." It tweaks packet sizes (MTU), ports, and junk headers based on what *almost* worked before.
+* **MTU Prober:** Automatically finds the maximum packet size your current network allows to prevent "connected but no internet" issues.
 
 ---
 
-## 🛠 The Arsenal (Protocols)
+## 🛠 Installation Guide
 
-VPN-Agent uses three layers of defense. If one gets blocked, it falls back to the next:
+### 1. Install the "Engines" (Client-side)
+The Agent is the driver, but you still need the engine. Install the core VPN binaries:
 
-| Protocol | What it does | When to use it |
-| :--- | :--- | :--- |
-| **WireGuard** | Pure speed. | Home WiFi, gaming, streaming. |
-| **AmneziaWG** | Disguises the handshake with "Junk" packets. | Public WiFi or ISPs that block standard WireGuard. |
-| **VLESS + Reality** | Masks your traffic to look like regular HTTPS web browsing. | Strict firewalls, school networks, heavy censorship. |
+**On Arch Linux:**
+```bash
+# Install WireGuard and XRay (for VLESS)
+sudo pacman -S wireguard-tools xray iproute2
 
----
+# Install AmneziaWG (requires an AUR helper like yay)
+yay -S amneziawg-tools-git amneziawg-dkms-git
+```
 
-## 💻 Installation
+**On Ubuntu/Debian:**
+```bash
+# Install WireGuard
+sudo apt update && sudo apt install wireguard-tools iproute2
 
-### 1. Server Setup (The Easy Way)
-Grab a clean **Ubuntu 24.04** VPS and run this script. It will automatically install all three protocols and spit out your config files.
+# Install XRay (using official script)
+bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
+
+# For AmneziaWG, you may need to build from source or use third-party PPAs.
+```
+
+### 2. Server Setup
+Run this on your **Ubuntu 24.04** VPS to set up the multi-protocol backend:
 ```bash
 wget https://raw.githubusercontent.com/artplay254/vpn-agent/main/setup_server.sh
 chmod +x setup_server.sh
 sudo ./setup_server.sh
 ```
+*Save the `client_wg.conf`, `client_awg.conf`, and `vless.json` files provided at the end.*
 
-### 2. Client Setup (Linux/Arch)
-Clone the tool to your machine:
+### 3. Install the Agent
 ```bash
 git clone https://github.com/artplay254/vpn-agent ~/.config/vpn-agent
 cd ~/.config/vpn-agent
-pip install rich  # Required for the beautiful terminal UI
+pip install rich  # For the terminal UI
 mkdir variants logs
 ```
 
-### 3. Add Your Configs
-Take the files the server gave you (`client_wg.conf`, `client_awg.conf`, `vless.json`) and drop them into the `~/.config/vpn-agent/` folder.
-
-**Crucial Step for Linux Users:** Give the VPN engine permission to manage your network so you don't have to type `sudo` for every little thing:
+### 4. Final Permissions
+Place your config files in `~/.config/vpn-agent/`. Then, give Xray permission to touch the network stack so you don't need `sudo` for every packet:
 ```bash
 sudo setcap "cap_net_admin,cap_net_bind_service+ep" $(which xray)
 ```
@@ -96,16 +94,16 @@ sudo setcap "cap_net_admin,cap_net_bind_service+ep" $(which xray)
 
 | Command | What it does |
 | :--- | :--- |
-| `vpn connect` | The main button. Probes the network, checks the database, and connects. |
-| `vpn disconnect` | Safely turns off the VPN and returns your internet to normal. |
-| `vpn stats` | Shows a clean table of all your networks and which configs work best. |
-| `vpn status` | Live look at your traffic, active protocol, and connection health. |
-| `vpn daemon` | Runs in the background, automatically reconnecting and mutating if you drop. |
+| `vpn connect` | **The "Smart" Button.** Probes, checks the brain, and connects. |
+| `vpn disconnect` | Safely kills the tunnel and restores your original internet. |
+| `vpn stats` | Shows which networks you've been on and what works best there. |
+| `vpn status` | Real-time traffic, protocol health, and ISP info. |
+| `vpn daemon` | Background mode: auto-reconnects and mutates if you get blocked. |
 
 ---
 
 ## 🌟 Support
 
-Built from the ground up by a 15-year-old developer with a **Saiyan Mindset**—constantly breaking limits to ensure digital freedom. 
+Built by a 15-year-old developer with a **Saiyan Mindset**—constantly breaking limits to ensure digital freedom. 
 
-If this tool helped you bypass a block and stay connected, please **leave a ⭐ on GitHub!** 🚀🦾
+**If this tool keeps you connected, leave a ⭐ on GitHub!** 🚀🦾
