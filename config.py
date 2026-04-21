@@ -9,7 +9,7 @@ from typing import Optional
 import pwd
 
 # --- Project Metadata ---
-VERSION = "0.4.0"
+VERSION = "0.4.5"
 
 # --- Path Configuration ---
 real_user = os.environ.get("SUDO_USER") or os.environ.get("USER") or "root"

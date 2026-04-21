@@ -17,6 +17,8 @@ class Brain:
     """
 
     def __init__(self, db_path: Path | str = BASE_DIR / "agent_brain.db"):
+        # Brain is intentionally a thin wrapper over BrainDatabase:
+        # network detection lives here, while persistence/scoring lives in database.py.
         self.db = BrainDatabase(Path(db_path))
         # Migrate old JSON metrics if they exist
         self._migrate_json_metrics()
@@ -31,10 +33,15 @@ class Brain:
 
     def detect_network_id(self) -> str:
         """Detect the current network context using SSID first, then ISP metadata."""
+        # SSID is the most precise signal because the same ISP can appear in many
+        # places with very different filtering behavior.
         ssid = self._detect_ssid()
         if ssid:
             return f"ssid:{ssid}"
 
+        # If Wi-Fi metadata is unavailable, fall back to an ISP fingerprint.
+        # This is weaker than SSID, but still better than treating every network
+        # as completely unknown.
         isp = self._detect_isp()
         if isp:
             return f"isp:{isp}"
@@ -50,6 +57,8 @@ class Brain:
             return None
 
     def _detect_isp(self) -> str | None:
+        # Use multiple services because captive portals or regional filtering
+        # can block one endpoint but not another.
         services = [
             ["curl", "-fsS", "--max-time", "3", "https://ipinfo.io/org"],
             ["curl", "-fsS", "--max-time", "3", "https://ipapi.co/org"],
@@ -108,60 +117,38 @@ class Brain:
 
     def scores_for_network(self, network_id: str) -> dict[str, dict[str, float]]:
         """Return scored configs for a network grouped by protocol from database."""
-        # Use the database's get_best_config logic but adapted for all protocols
-        query = '''
-            SELECT
-                c.protocol,
-                c.config_hash,
-                COUNT(m.id) as total_attempts,
-                SUM(CASE WHEN m.success THEN 1 ELSE 0 END) as success_count,
-                AVG(m.latency) as avg_latency
-            FROM configs c
-            JOIN metrics m ON c.id = m.config_id
-            WHERE m.network_id = ?
-            GROUP BY c.protocol, c.config_hash
-            HAVING total_attempts >= 1
-        '''
-
-        import sqlite3
-        try:
-            with self.db._get_connection() as conn:
-                cursor = conn.execute(query, (network_id,))
-                rows = cursor.fetchall()
-        except sqlite3.OperationalError:
-            return {}
-
         scored: dict[str, dict[str, float]] = {}
-        for row in rows:
-            protocol = row[0]
-            config_hash = row[1]
-            total_attempts = row[2]
-            success_count = row[3]
-            avg_latency = row[4]
-
-            success_rate = success_count / total_attempts if total_attempts else 0.0
-            latency_factor = 0.25 if avg_latency is None else max(0.0, min(1.0, 1.0 - ((avg_latency - 20.0) / 480.0)))
-            score = success_rate * 0.7 + latency_factor * 0.3
-
-            if protocol not in scored:
-                scored[protocol] = {}
-            scored[protocol][config_hash] = score
+        # `get_ranked_configs()` already applies stale filtering and recency decay,
+        # so the Brain only needs to reshape the rows by protocol/hash.
+        for config in self.db.get_ranked_configs(network_id):
+            if config.protocol not in scored:
+                scored[config.protocol] = {}
+            scored[config.protocol][config.config_hash] = config.reliability_score
 
         return scored
 
     def best_config_hash(self, protocol: str, network_id: str) -> str | None:
         """Choose the best historic config hash for a protocol in the current network."""
-        scores = self.scores_for_network(network_id).get(protocol, {})
-        if not scores:
-            return None
-        return max(scores, key=scores.get)
+        ranked_hashes = self.ranked_config_hashes(protocol, network_id)
+        return ranked_hashes[0] if ranked_hashes else None
+
+    def ranked_config_hashes(self, protocol: str, network_id: str) -> list[str]:
+        """Return scored config hashes for a protocol in rank order."""
+        return [entry.config_hash for entry in self.db.get_ranked_configs(network_id, protocol=protocol)]
 
     def recommend_protocol_order(self, network_id: str, fallback_order: list[str]) -> list[str]:
         """Reorder protocols based on historical network-specific performance."""
-        scores = self.scores_for_network(network_id)
+        ranked_configs = self.db.get_ranked_configs(network_id)
+        best_by_protocol: dict[str, float] = {}
+        for entry in ranked_configs:
+            # `ranked_configs` arrives sorted best-first, so the first time we see
+            # a protocol is the score we want to represent that protocol.
+            if entry.protocol in fallback_order and entry.protocol not in best_by_protocol:
+                best_by_protocol[entry.protocol] = entry.reliability_score
         weighted: dict[str, float] = {}
         for protocol in fallback_order:
-            protocol_scores = scores.get(protocol, {})
-            weighted[protocol] = max(protocol_scores.values()) if protocol_scores else 0.0
+            # Unknown protocols keep a score of 0.0, which preserves the user's
+            # original fallback order instead of inventing a preference.
+            weighted[protocol] = best_by_protocol.get(protocol, 0.0)
 
         return sorted(fallback_order, key=lambda name: (-weighted[name], fallback_order.index(name)))

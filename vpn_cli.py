@@ -6,6 +6,7 @@ import os
 import sys
 import argparse
 import re
+import random
 import logging.handlers
 import shutil
 import signal
@@ -37,6 +38,10 @@ from config import (
 from brain import Brain
 from database import BrainDatabase
 from prober import probe_mtu
+
+EXPLORATION_EPSILON = 0.1
+SESSION_REVALIDATION_WINDOW = 300
+WATCHDOG_CHECK_INTERVAL = 15
 
 # ─── SETUP LOGGING ────────────────────────────────────────────────────────────
 # Configure logging to write to agent.log file with timestamps
@@ -179,7 +184,8 @@ def log_connection_metrics(db: BrainDatabase, protocol: str, config_hash: str, m
     """
     import time
     
-    # Register config if not already registered
+    # The metrics table points at a config row, so make sure the config identity
+    # exists before we store the attempt.
     config_id = db.register_config(
         protocol=protocol,
         config_hash=config_hash,
@@ -188,15 +194,17 @@ def log_connection_metrics(db: BrainDatabase, protocol: str, config_hash: str, m
         is_mutation=False  # Will be updated when mutations are registered
     )
     
-    # Parse latency
+    # Human-readable strings like "42.3 ms" are fine for the CLI, but the DB
+    # wants a numeric value for scoring and aggregation.
     latency_value = None
     if latency != "N/A":
         match = re.search(r"(\d+(?:\.\d+)?)", latency)
         if match:
             latency_value = float(match.group(1))
     
-    # Log the attempt
-    db.log_attempt(
+    # Returning the metric id lets callers later mark a "successful" attempt as
+    # stale if the watchdog proves the session was not really stable.
+    return db.log_attempt(
         config_id=config_id,
         timestamp=time.time(),
         network_id=network_id,
@@ -348,6 +356,8 @@ def filter_available_protocols(order: list[str]) -> list[str]:
         if not proto:
             log_event(f"Unknown protocol: {name}", "error")
             continue
+        # Validate config before checking the binary so the user gets the most
+        # useful error first when something is misconfigured locally.
         if not validate_protocol_config(name):
             log_event(f"Skipping {name}: invalid or missing configuration.", "error")
             continue
@@ -724,6 +734,109 @@ def _internet_ok(name: str, proto: dict) -> bool:
     return is_internet_up(proto["iface"])
 
 
+def _tcp_handshake_ok() -> tuple[bool, str]:
+    """Use a TCP handshake to validate live traffic regardless of tunnel type."""
+    return _tcp_check(CHECK_IP, 443, timeout_s=2.0)
+
+
+def _select_protocol_order(order: list[str], brain: Brain, network_id: str) -> tuple[list[str], str]:
+    """Apply epsilon-greedy protocol ordering for the current session."""
+    ranked_order = brain.recommend_protocol_order(network_id, order)
+    if len(ranked_order) <= 1:
+        return ranked_order, "exploit"
+
+    # Most of the time we exploit the best-known path. Sometimes we deliberately
+    # test a weaker option so the brain can notice that a previously blocked path
+    # has recovered.
+    if random.random() >= EXPLORATION_EPSILON:
+        return ranked_order, "exploit"
+
+    explored = list(ranked_order)
+    if len(explored) == 2:
+        explored[0], explored[1] = explored[1], explored[0]
+    else:
+        candidate_index = random.randint(1, len(explored) - 1)
+        candidate = explored.pop(candidate_index)
+        explored.insert(0, candidate)
+    return explored, "explore"
+
+
+def _select_config_hash(brain: Brain, protocol: str, network_id: str, mode: str) -> str | None:
+    """Pick the best known config hash, or a lower-ranked one during exploration."""
+    ranked_hashes = brain.ranked_config_hashes(protocol, network_id)
+    if not ranked_hashes:
+        return None
+    # In exploit mode we want the top-ranked variant. In explore mode we
+    # intentionally avoid the top slot when alternatives exist.
+    if mode != "explore":
+        return ranked_hashes[0]
+    if len(ranked_hashes) == 1:
+        return ranked_hashes[0]
+    if len(ranked_hashes) == 2:
+        return ranked_hashes[1]
+    return random.choice(ranked_hashes[1:])
+
+
+def _probe_and_cache_mtu(db: BrainDatabase, network_id: str) -> int | None:
+    """Run a fresh binary-search MTU probe and persist the result when possible."""
+    try:
+        log_event(f"🧪 Probing MTU for {network_id}...")
+        # MTU is network-specific, so once we discover it we cache it by
+        # `network_id` and reuse it on future connects.
+        optimized_mtu = probe_mtu(CHECK_IP, MTU_MIN, MTU_MAX)
+        db.save_network_mtu(network_id, optimized_mtu)
+        log_event(f"✅ Discovered MTU for {network_id}: {optimized_mtu}", "success")
+        return optimized_mtu
+    except PermissionError as e:
+        log_event(f"⚠️ {e}", "error")
+    except RuntimeError as e:
+        log_event(f"⚠️ {e}", "error")
+    except FileNotFoundError as e:
+        log_event(f"⚠️ {e}", "error")
+    return None
+
+
+def _watch_connection_stability(name: str, proto: dict, network_id: str, db: BrainDatabase,
+                                success_metric_id: int | None, config_hash: str, mtu: int,
+                                latency: str, port: int | None) -> tuple[bool, int | None]:
+    """Re-validate traffic for the first 300 seconds and invalidate stale successes."""
+    deadline = time.time() + SESSION_REVALIDATION_WINDOW
+    log_event(
+        f"🛡️ Session watchdog active for {proto['label']} ({SESSION_REVALIDATION_WINDOW}s re-validation window)."
+    )
+    while time.time() < deadline:
+        # A process existing is not enough; we want proof that traffic still flows
+        # through the tunnel after the initial handshake.
+        ok, err = _tcp_handshake_ok()
+        if not ok:
+            log_event(
+                f"🧠 Session re-validation failed for {proto['label']}; marking early success as stale.",
+                "warning",
+            )
+            if success_metric_id is not None:
+                db.mark_metric_stale(success_metric_id, "stale: watchdog handshake failure within 300s")
+            log_connection_metrics(
+                db,
+                name,
+                config_hash,
+                mtu,
+                latency,
+                False,
+                0.0,
+                port,
+                f"watchdog handshake failure within 300s: {err}",
+                network_id,
+            )
+            # Tear down the unstable session before trying the next protocol, so we
+            # do not leave half-working routes or interfaces behind.
+            stop_all()
+            refreshed_mtu = _probe_and_cache_mtu(db, network_id)
+            log_event("🔁 Switching away from the unstable protocol immediately.", "warning")
+            return False, refreshed_mtu
+        time.sleep(WATCHDOG_CHECK_INTERVAL)
+    return True, None
+
+
 def get_active_vpn():
     """Detect which VPN protocol is currently active
     
@@ -765,14 +878,18 @@ def connect(order: list[str] | None = None):
     stop_all()
     log_event("--- New Connection Session Started ---")
 
+    # `Brain` owns environment detection and historical ranking. The DB instance
+    # underneath it gives us direct access to persistence when we need it.
     brain = Brain()
     db = brain.db  # Get database instance from brain
     network_id = brain.detect_network_id()
     order = order or FALLBACK_ORDER
-    order = brain.recommend_protocol_order(network_id, order)
+    order, selection_mode = _select_protocol_order(order, brain, network_id)
 
     log_event(f"🧠 Network profile: {network_id}")
     log_event(f"🧭 Adaptive fallback order: {', '.join(order)}")
+    if selection_mode == "explore":
+        log_event("🎲 Exploration mode active (epsilon=0.10). Re-validating lower-ranked paths.", "warning")
 
     order = filter_available_protocols(order)
     if not order:
@@ -783,31 +900,21 @@ def connect(order: list[str] | None = None):
     if optimized_mtu is not None:
         log_event(f"🧠 Cached MTU for {network_id}: {optimized_mtu}")
     else:
-        try:
-            log_event(f"🧪 Probing MTU for {network_id}...")
-            optimized_mtu = probe_mtu(CHECK_IP, MTU_MIN, MTU_MAX)
-            db.save_network_mtu(network_id, optimized_mtu)
-            log_event(f"✅ Discovered MTU for {network_id}: {optimized_mtu}", "success")
-        except PermissionError as e:
-            log_event(f"⚠️ {e}", "error")
-            optimized_mtu = None
-        except RuntimeError as e:
-            log_event(f"⚠️ {e}", "error")
-            optimized_mtu = None
-        except FileNotFoundError as e:
-            log_event(f"⚠️ {e}", "error")
-            optimized_mtu = None
+        optimized_mtu = _probe_and_cache_mtu(db, network_id)
 
     for name in order:
+        # Copy the protocol definition so we can safely swap in variant paths or a
+        # detected XRay interface without mutating the global config table.
         proto = dict(PROTOCOLS[name])
         mutator = ConfigMutator(name)
-        best_hash = brain.best_config_hash(name, network_id)
+        best_hash = _select_config_hash(brain, name, network_id, selection_mode)
 
         if best_hash:
             best_path = mutator.find_variant_path(best_hash)
             if best_path:
                 proto["conf"] = best_path
-                log_event(f"🧠 Reusing best-known variant for {name}: {best_hash[:8]}")
+                reuse_label = "exploration candidate" if selection_mode == "explore" else "best-known variant"
+                log_event(f"🧠 Reusing {reuse_label} for {name}: {best_hash[:8]}")
             else:
                 log_event(f"🧠 Best historic {name} variant {best_hash[:8]} is missing locally. Using default config.")
 
@@ -815,6 +922,14 @@ def connect(order: list[str] | None = None):
         if best_hash:
             score_data = db.get_config_score(best_hash, network_id)
             reliability_score = score_data[0] if score_data else None
+            ranked_configs = db.get_ranked_configs(network_id, protocol=name)
+            matching = next((entry for entry in ranked_configs if entry.config_hash == best_hash), None)
+            if matching and matching.decay_applied:
+                age_hours = max(0.0, (time.time() - matching.last_updated) / 3600.0)
+                log_event(
+                    f"🧠 Brain decay applied to {matching.alias}: age={age_hours:.1f}h weight={matching.recency_weight:.3f}",
+                    "warning",
+                )
 
         display_connection_dashboard(
             network_id,
@@ -824,11 +939,16 @@ def connect(order: list[str] | None = None):
         )
 
         tried_mutation = False
+        force_next_protocol = False
         for phase in range(2):
+            # Phase 0: try the best-known config as-is.
+            # Phase 1: if that failed, generate a new mutated variant and retry.
             if phase == 1:
                 if tried_mutation:
                     break
                 try:
+                    # Parent hash tells the DB which known config this mutation
+                    # evolved from, which helps later score comparisons.
                     current_parent_hash = compute_config_hash(proto["conf"])
                     mutation_params = {}
                     if optimized_mtu is not None:
@@ -873,7 +993,9 @@ def connect(order: list[str] | None = None):
                 latency = "N/A"
 
                 def record_metrics(success: bool, mtu: int, latency: str, duration: float, error_msg: str = ""):
-                    log_connection_metrics(
+                    # Inner helper keeps every metrics write consistent for this
+                    # specific attempt without repeating the same arguments.
+                    return log_connection_metrics(
                         db,
                         name,
                         config_hash,
@@ -887,6 +1009,8 @@ def connect(order: list[str] | None = None):
                     )
 
                 if proto["cmd"] == "xray":
+                    # XRay runs as a long-lived user-space process instead of a
+                    # single `up` command, so setup is more manual than WG/AWG.
                     before_links = _list_links()
                     with open(XRAY_LOG_FILE, "ab", buffering=0) as xray_log:
                         xray_proc = subprocess.Popen(
@@ -898,6 +1022,8 @@ def connect(order: list[str] | None = None):
 
                     deadline = time.time() + max(CONNECT_WAIT.get(name, 5), 15)
                     while time.time() < deadline:
+                        # Exit early if xray crashed before even creating its tun
+                        # interface. That is a config/runtime failure, not a route issue.
                         if xray_proc.poll() is not None:
                             log_event(
                                 f"❌ XRay exited early (code {xray_proc.returncode}). Check {XRAY_LOG_FILE}",
@@ -914,6 +1040,8 @@ def connect(order: list[str] | None = None):
 
                     ok, _ = run_cmd(["ip", "link", "show", proto["iface"]])
                     if not ok:
+                        # Some XRay builds ignore the configured interface name and
+                        # create `xray1`, `xray2`, etc. Detect that dynamically.
                         detected = _detect_xray_iface(before_links)
                         if detected:
                             proto = dict(proto)
@@ -921,6 +1049,8 @@ def connect(order: list[str] | None = None):
                             ok = True
 
                     if not ok:
+                        # Log tail is the fastest way to surface why XRay failed to
+                        # create the interface without making the user inspect files.
                         tail = _tail_text_file(str(XRAY_LOG_FILE))
                         log_event(f"❌ {proto['iface']} not created by XRay. Check {XRAY_LOG_FILE}", "error")
                         if tail:
@@ -932,6 +1062,9 @@ def connect(order: list[str] | None = None):
                         _ensure_iface_ipv4_from_xray_conf(proto["iface"], str(proto["conf"]))
 
                     try:
+                        # XRay tun needs manual routing setup:
+                        # 1. keep the server reachable via the original gateway
+                        # 2. send default traffic into the tunnel interface
                         gateway = _get_default_gateway()
                         if not gateway:
                             raise RuntimeError("Could not determine default gateway")
@@ -954,12 +1087,15 @@ def connect(order: list[str] | None = None):
                         record_metrics(False, MTU_MIN, "N/A", time.time() - start_time, str(e))
                         success = False
                 else:
+                    # WG/AWG expose a simpler "up/down" interface, so setup is a
+                    # single command and route programming is delegated to the tool.
                     success, err = run_cmd([proto["cmd"], "up", str(proto["conf"])])
                     if not success:
                         record_metrics(False, MTU_MIN, "N/A", time.time() - start_time, err)
                         continue
 
                 if success:
+                    # Give the tunnel a brief moment to settle before probing traffic.
                     time.sleep(2)
                     if proto["cmd"] == "xray":
                         ok_up, err = _tcp_check(CHECK_IP, 443, timeout_s=2.0)
@@ -971,10 +1107,33 @@ def connect(order: list[str] | None = None):
                     if ok_up:
                         display_connection_dashboard(network_id, proto['label'], reliability_score, "Handshake successful")
                         log_event(f"✅ {proto['label']} active.", "success")
+                        # We tune MTU after the tunnel comes up so the measurement
+                        # reflects the actual live path instead of the raw network.
                         best_mtu = find_best_mtu(proto["iface"])
                         apply_mtu(proto["iface"], best_mtu)
+                        mtu = best_mtu
                         latency = get_latency(proto["iface"]) if proto["cmd"] != "xray" else "N/A"
-                        record_metrics(True, best_mtu, latency, time.time() - start_time)
+                        success_metric_id = record_metrics(True, best_mtu, latency, time.time() - start_time)
+                        # A "successful" connect can still die right away on hostile
+                        # networks, so we keep watching before declaring victory.
+                        stable, refreshed_mtu = _watch_connection_stability(
+                            name,
+                            proto,
+                            network_id,
+                            db,
+                            success_metric_id,
+                            config_hash,
+                            best_mtu,
+                            latency,
+                            port,
+                        )
+                        if not stable:
+                            if refreshed_mtu is not None:
+                                optimized_mtu = refreshed_mtu
+                            # Skip mutation here; the tunnel proved unstable under
+                            # real traffic, so we switch protocols immediately.
+                            force_next_protocol = True
+                            break
                         return name
 
                     display_connection_dashboard(network_id, proto['label'], reliability_score, "Handshake failed")
@@ -982,9 +1141,17 @@ def connect(order: list[str] | None = None):
                     record_metrics(False, MTU_MIN, "N/A", time.time() - start_time, "traffic check failed")
                     stop_all()
 
+                if force_next_protocol:
+                    break
+
             if phase == 0 and not tried_mutation:
+                # Only reach phase 1 if the initial config failed and we still have
+                # room to try a generated variant.
                 continue
             break
+
+        if force_next_protocol:
+            continue
 
     log_event("❌ Critical: All protocols failed.", "error")
     return None
